@@ -6,31 +6,40 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.lifecycleScope
 import cat.martori.sesam.ui.theme.ObretSesamTheme
 import io.ktor.client.HttpClient
-import io.ktor.client.plugins.defaultRequest
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logger
 import io.ktor.client.plugins.logging.Logging
@@ -41,9 +50,14 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+
+val OPEN_URL = stringPreferencesKey("open")
+val CLOSE_URL = stringPreferencesKey("close")
 
 class MainActivity : ComponentActivity() {
 
@@ -59,10 +73,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        defaultRequest {
-            url("http://localhost:8080/")
-        }
     }
+
+    private val preferences by preferencesDataStore("urls")
+
+    private var loading by mutableStateOf(false)
 
     init {
         embeddedServer(Netty, port = 8080) {
@@ -79,8 +94,6 @@ class MainActivity : ComponentActivity() {
 
     @OptIn(ExperimentalFoundationApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
-
-
         super.onCreate(savedInstanceState)
         setContent {
             ObretSesamTheme {
@@ -89,10 +102,23 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    HorizontalPager(state = rememberPagerState(initialPage = 1) { 3 }) {
-                        when (it) {
-                            0 -> SettingsScreen()
-                            1 -> MainScreen({ get("abrir") }, { get("cerrar") })
+                    val endpoints by preferences.data.map { it[OPEN_URL] to it[CLOSE_URL] }
+                        .collectAsState(null to null)
+                    val (open, close) =
+                        (endpoints.first ?: "http://localhost:8080/abrir") to
+                                (endpoints.second ?: "http://localhost:8080/cerrar")
+                    HorizontalPager(state = rememberPagerState(initialPage = 1) { 3 }) { page ->
+                        when (page) {
+                            0 -> SettingsScreen(open, close) { newOpen, newClose ->
+                                lifecycleScope.launch {
+                                    preferences.edit {
+                                        it[OPEN_URL] = newOpen
+                                        it[CLOSE_URL] = newClose
+                                    }
+                                }
+                            }
+
+                            1 -> MainScreen(open, close)
                             2 -> LogsScreen(logs)
                         }
                     }
@@ -102,42 +128,79 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun get(endpoint: String) = lifecycleScope.launch {
+        loading = true
         runCatching { client.get(endpoint) }.onFailure { error -> logs.update { it + error.message.orEmpty() } }
+        loading = false
     }
-}
 
-@Composable
-fun SettingsScreen() {
-    Text(text = "TODO SETTINGS")
-}
+    @Composable
+    fun SettingsScreen(
+        openEndpoint: String,
+        closeEndpoint: String,
+        updateEndpoints: (String, String) -> Unit
+    ) {
+        Column(
+            verticalArrangement = Arrangement.SpaceEvenly,
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            TextField(
+                value = openEndpoint,
+                onValueChange = { updateEndpoints(it, closeEndpoint) },
+                label = { Text(text = "Url para abrir") },
+                singleLine = true,
+            )
+            TextField(
+                value = closeEndpoint,
+                onValueChange = { updateEndpoints(openEndpoint, it) },
+                label = { Text(text = "Url para cerrar") },
+                singleLine = true,
+            )
 
-@Composable
-fun LogsScreen(logsFlow: MutableStateFlow<List<String>>) {
-    val logs by logsFlow.collectAsState()
-    Column(verticalArrangement = Arrangement.Top, modifier = Modifier.fillMaxSize()) {
-        Text(text = "Logs", style = MaterialTheme.typography.headlineMedium)
-        LazyColumn {
-            items(logs) {
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                Text(text = it)
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        }
+    }
+
+    @Composable
+    fun LogsScreen(logsFlow: MutableStateFlow<List<String>>) {
+        val logs by logsFlow.collectAsState()
+        Column(verticalArrangement = Arrangement.Top, modifier = Modifier.fillMaxSize()) {
+            Text(text = "Logs", style = MaterialTheme.typography.headlineMedium)
+            LazyColumn {
+                items(logs) {
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    Text(text = it)
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                }
             }
         }
     }
-}
 
-@Composable
-fun MainScreen(open: () -> Unit, close: () -> Unit, modifier: Modifier = Modifier) {
-    Column(
-        verticalArrangement = Arrangement.SpaceEvenly,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier.fillMaxSize()
-    ) {
-        Button(onClick = { open() }, modifier = Modifier.fillMaxWidth(0.5f)) {
-            Text(text = "Abril", fontSize = 24.sp)
-        }
-        Button(onClick = { close() }, modifier = Modifier.fillMaxWidth(0.5f)) {
-            Text(text = "Cerral", fontSize = 24.sp)
+    @Composable
+    fun MainScreen(openEndpoint: String, closeEndpoint: String, modifier: Modifier = Modifier) {
+        Box(Modifier.fillMaxSize()) {
+            if (loading) CircularProgressIndicator(
+                modifier = Modifier
+                    .size(86.dp)
+                    .align(Alignment.Center)
+            ) else Column(
+                verticalArrangement = Arrangement.SpaceEvenly,
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = modifier.fillMaxSize()
+            ) {
+                Button(
+                    onClick = { get(openEndpoint) },
+                    modifier = Modifier.fillMaxWidth(0.5f)
+                ) {
+                    Text(text = "Abril", fontSize = 24.sp)
+                }
+                Button(
+                    onClick = { get(closeEndpoint) },
+                    modifier = Modifier.fillMaxWidth(0.5f)
+                ) {
+                    Text(text = "Cerral", fontSize = 24.sp)
+                }
+            }
         }
     }
+
 }
