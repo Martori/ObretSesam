@@ -8,6 +8,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -19,6 +20,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -27,11 +30,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.edit
@@ -50,7 +52,6 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
@@ -61,14 +62,14 @@ val CLOSE_URL = stringPreferencesKey("close")
 
 class MainActivity : ComponentActivity() {
 
-    private val logs = MutableStateFlow(emptyList<String>())
+    private val logsFlow = MutableStateFlow(emptyList<String>())
 
     private val client = HttpClient {
         install(Logging) {
             level = LogLevel.BODY
             logger = object : Logger {
                 override fun log(message: String) {
-                    logs.update { it + message }
+                    logsFlow.update { it + message }
                     Log.d("Http", message)
                 }
             }
@@ -119,7 +120,7 @@ class MainActivity : ComponentActivity() {
                             }
 
                             1 -> MainScreen(open, close)
-                            2 -> LogsScreen(logs)
+                            2 -> LogsScreen()
                         }
                     }
                 }
@@ -129,7 +130,7 @@ class MainActivity : ComponentActivity() {
 
     private fun get(endpoint: String) = lifecycleScope.launch {
         loading = true
-        runCatching { client.get(endpoint) }.onFailure { error -> logs.update { it + error.message.orEmpty() } }
+        runCatching { client.get(endpoint) }.onFailure { error -> logsFlow.update { it + error.message.orEmpty() } }
         loading = false
     }
 
@@ -161,14 +162,32 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    fun LogsScreen(logsFlow: MutableStateFlow<List<String>>) {
+    fun LogsScreen() {
         val logs by logsFlow.collectAsState()
         Column(verticalArrangement = Arrangement.Top, modifier = Modifier.fillMaxSize()) {
-            Text(text = "Logs", style = MaterialTheme.typography.headlineMedium)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(4.dp)
+            ) {
+                Text(text = "Logs", style = MaterialTheme.typography.headlineMedium)
+                IconButton(
+                    onClick = {
+                        logsFlow.update { emptyList() }
+                    },
+                ) {
+                    Icon(
+                        painterResource(R.drawable.delete_logs),
+                        contentDescription = "clear Logs"
+                    )
+                }
+            }
             LazyColumn {
                 items(logs) {
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                    Text(text = it)
+                    Text(text = it, modifier = Modifier.padding(horizontal = 8.dp))
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 }
             }
